@@ -1,0 +1,33 @@
+set time: day h m s
+T 3 22 30 44  
+
+set prog: index velve day(0-6 if 7 every day) hour min throtle(msec) close(if pass min)
+N 0 0 7 22 30 6000 20
+
+activate prog 0
+A 0
+
+deactivate prog 10
+
+D 10
+
+list all progs
+L
+
+get battery voltage
+V
+
+get offline counter all and last session
+O
+
+get time
+g
+
+get human time
+G
+
+open velve 0 throtle=5000msec
+1 0 5000
+
+close velve 0
+0 0
