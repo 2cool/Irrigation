@@ -10,14 +10,24 @@
 #define VELVES 2
 #define TIME_2_OPEN_MAX 10000
 #define MAX_DELAY 15000
+
+
+
+//****************************************
+
 #define OFFLINE (sizeof(PROG)* PROGS_AMOUNT)
+#define V_L (OFFLINE + 1)
+#define V_H (OFFLINE + 5)
+#define M_L (OFFLINE + 9)
+#define M_H (OFFLINE + 11)
+
 
 //////////////////////////////
 int64_t correction4 =    987470;//,19122609673790776152980877
 //int64_t correction4 = 1151496;
 int64_t correction = -1000;
 ///////////////////////////////
-
+float LOW_V = 4.3, HIGHT_V = 4.6;
 uint32_t throttle[VELVES] = { 0, 0 };
 
 
@@ -60,12 +70,15 @@ struct PROG{
 };
 
 
+
+
 int64_t time_;
 int64_t last_correction_time=0;
 uint32_t old_time=0;
 PROG prog[PROGS_AMOUNT];
 PROG *active_prog[VELVES];
-float volt = 5, moisture_mark = 800, do_not_water_level_L = 677, do_water_level_H=750;
+float volt = 5, moisture_mark = 800;
+uint16_t do_not_water_level_L = 677, do_water_level_H=750;
 
 uint8_t offline_cnt=0;
 uint8_t this_session_offline_cnt = 0;
@@ -81,7 +94,25 @@ uint64_t get_time()
 //+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 uint16_t opened_thr[2] = { 0, 0 };
 
-
+void hard_open(const uint8_t v, const uint8_t thr)
+{
+#ifndef __DEBUG
+	digitalWrite(7 + v * 2, LOW);
+	digitalWrite(6 + v * 2, HIGH);
+	delay(thr);
+	digitalWrite(6 + v * 2, LOW);
+	delay(MAX_DELAY - thr + 1);
+#endif
+}
+void hard_close(const uint8_t v)
+{
+#ifndef __DEBUG
+	digitalWrite(6 + v * 2, LOW);
+	digitalWrite(7 + v * 2, HIGH);
+	delay(MAX_DELAY);
+	digitalWrite(7 + v * 2, LOW);
+#endif
+}
 void close2()
 {
 	Serial.println(" CLOSED2");
@@ -109,12 +140,7 @@ void close(const uint8_t v)
 		opened_thr[v] = 0;
 		Serial.print(" CLOSED ");
 		Serial.println(v);
-#ifndef __DEBUG
-		digitalWrite(6 + v * 2, LOW);
-		digitalWrite(7 + v * 2, HIGH);
-		delay(MAX_DELAY);
-		digitalWrite(7 + v * 2, LOW);
-#endif
+		hard_close(v);
 	}
 }
 
@@ -137,13 +163,7 @@ void open(const uint8_t v, const uint16_t thr)
 		Serial.print(v);
 		Serial.print(" ");
 		Serial.println(thr);
-#ifndef __DEBUG
-		digitalWrite(7 + v * 2, LOW);
-		digitalWrite(6 + v * 2, HIGH);
-		delay(thr);
-		digitalWrite(6 + v * 2, LOW);
-		delay(MAX_DELAY - thr + 1);
-#endif
+		hard_open(v, thr);
 	}
 	else
 	{
@@ -350,7 +370,7 @@ void set_prog(String inputString) {
 
 
 void setup() {
-	offline_cnt = EEPROM.read(OFFLINE);
+
 	this_session_offline_cnt = 0;
     old_time = millis();
     Serial.begin(9600);
@@ -366,7 +386,12 @@ void setup() {
         }
         prog[i].active = false;
     }
-
+	
+	offline_cnt = EEPROM.read(OFFLINE);
+	EEPROM.get(V_L, LOW_V);
+	EEPROM.get(V_H, HIGHT_V);
+	EEPROM.get(M_L, do_not_water_level_L);
+	EEPROM.get(M_H, do_water_level_H);
 
     close2();
 
@@ -389,6 +414,94 @@ void test_voltage_and_Moisture()
 	}
 	vm ^= true;
 }
+void OFF_prog(const String&msg)
+{
+	String token[2];
+	int len = tokens(2, token, " ", msg);
+	if (len == 2)
+	{
+		const uint8_t velve = token[1].toInt();
+		if (velve < VELVES)
+		{
+			Serial.print(velve);
+			Serial.println(" closed");
+			hard_close(velve);
+		}
+	}
+}
+void ON_prog(const String&msg)
+{
+	//1 00 5000
+	String token[3];
+	const int len = tokens(3, token, " ", msg);
+	if (len == 3)
+	{
+		const uint8_t velve = token[1].toInt();
+		const int t = token[2].toInt();
+		if (velve < VELVES && t>100)
+		{
+			Serial.print(velve);
+			Serial.print(" opened ");
+			Serial.println(t);
+			hard_open(velve, t);
+		}
+	}
+}
+void M_prog(const String &msg)
+{
+	String token[3];
+	const int len = tokens(3, token, " ", msg);
+	if (len == 3)
+	{
+		//M 600 600
+		int l, h;
+		l = token[1].toInt();
+		h = token[2].toInt();
+		if (l > 500 && h > l) {
+			do_not_water_level_L = l;
+			do_water_level_H = h;
+			EEPROM.put(M_L, l);
+			EEPROM.put(M_H, h);
+		}
+	}
+	
+}
+void V_prog(const String &msg)
+{
+	String token[3];
+	int len = tokens(3, token, " ", msg);
+	if (len == 3)
+	{
+		const float l = token[1].toFloat();
+		const float h = token[2].toFloat();
+		if (l > 4 && h < 5)
+		{
+			LOW_V = l;
+			HIGHT_V = h;
+			EEPROM.put(V_L, l);
+			EEPROM.put(V_H, h);
+		}
+	}
+
+}
+void prints_logs()
+{
+	for (int i = 0; i < LOG_SIZE; i++)
+	{
+		const LOGS &p = logs[(logsI - i - 1)&(LOG_SIZE - 1)];
+		Serial.print(p.velve);
+		Serial.print(p.open ? " o " : " c ");
+		Serial.print(p.day);
+		Serial.print(" ");
+		if (p.h < 10)
+			Serial.print('0');
+		Serial.print(p.h);
+		Serial.print(":");
+		if (p.m < 10)
+			Serial.print('0');
+		Serial.println(p.m);
+	}
+}
 void do_some(String &msg)
 {
 	switch (msg[0]) {
@@ -403,21 +516,7 @@ void do_some(String &msg)
 		}
 		break;
 	case 'M': 
-		{
-			//M 600 600
-			int l, h;
-			l = msg.substring(2, 5).toInt();
-			h = msg.substring(6, 9).toInt();
-			if (l > 500 && h > l) {
-				do_not_water_level_L = l;
-				do_water_level_H = h;
-			}
-			else{
-				Serial.println("error");
-        Serial.println(l);
-        Serial.println(h);
-		  }
-		}
+		M_prog(msg);
 	case 'm': {
 		Serial.print("rain at ");
 		Serial.print(do_not_water_level_L);
@@ -466,21 +565,7 @@ void do_some(String &msg)
 			break;
 		}
 	case 'L':
-		for (int i = 0; i < LOG_SIZE; i++)
-		{
-			const LOGS &p = logs[(logsI - i - 1)&(LOG_SIZE - 1)];
-			Serial.print(p.velve);
-			Serial.print(p.open?" opened ":" closed ");
-			Serial.print(p.day);
-			Serial.print(" ");
-			if (p.h < 10)
-				Serial.print('0');
-			Serial.print(p.h);
-			Serial.print(":");
-			if (p.m < 10)
-				Serial.print('0');
-			Serial.println(p.m);
-		}
+		prints_logs();
 		break;
 	case 'l':
 		{
@@ -492,11 +577,16 @@ void do_some(String &msg)
 			}
 			break;
 		}
+	
+	case 'V': //4.3 4.4
+		V_prog(msg);
 	case 'v':
-	case 'V':
+		Serial.print(LOW_V);
+		Serial.print(" ");
+		Serial.print(HIGHT_V);
+		Serial.print(" ");
 		Serial.println(volt);
 		break;
-
 	case 'o':
 	case 'O':
 		{
@@ -516,24 +606,10 @@ void do_some(String &msg)
 			break;
 		}
 	case '1': 
-		{
-			//1 00 5000
-			uint8_t velve = msg[2] - '0';
-			int i = 4;
-			if (msg[3] != ' ') {
-				velve = velve * 10 + msg[3] - '0';
-				i++;
-			}
-			const uint16_t t = msg.substring(i).toInt();
-			open(velve, t);
-			break;
-		}
+		ON_prog(msg);
+		break;
 	case '0':  //0 00
-		uint8_t velve = msg[2] - '0';
-		if (msg[3] != ' ') {
-			velve = velve * 10 + msg[3] - '0';
-		}
-		close(velve);
+		OFF_prog(msg);
 		break;
 	}
 
@@ -571,14 +647,14 @@ void loop() {
 
 	test_voltage_and_Moisture();
 	//Serial.println(moisture_mark);
-	  if (online && volt < 4.3) {
+	  if (online && volt < LOW_V) {
 		  online = false;
 		  print_time(now_t);
 		  Serial.println(" OFFLINE");
 		  EEPROM.write(OFFLINE, ++offline_cnt);
 		  this_session_offline_cnt++;
 	  }
-	if (!online && volt > 4.6) {
+	if (!online && volt > HIGHT_V) {
 		online = true;
 		print_time(now_t);
 		Serial.println(" ONLINE");
